@@ -1,0 +1,390 @@
+import json
+import datetime as dt
+from typing import Dict, List, Any, Callable, Set, Union, cast
+from abc import ABC, abstractmethod
+
+class Person:
+    def __init__(self, name: str, born_in: dt.datetime) -> None:
+        self._name: str = name
+        self._friends: List['Person'] = []
+        self._born_in: dt.datetime = born_in
+    
+    def add_friend(self, friend: 'Person') -> None:
+        self._friends.append(friend)
+        friend._friends.append(self)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            '_name': self._name,
+            '_born_in': self._born_in.isoformat(),
+            '_friends_ids': [id(friend) for friend in self._friends]
+        }
+
+def encode_fp(obj: Person) -> bytes:
+    visited: Set[int] = set()
+    objects_data: List[Dict[str, Any]] = []
+    id_to_index: Dict[int, int] = {}
+    
+    def collect_objects(current_obj: Person) -> None:
+        obj_id: int = id(current_obj)
+        if obj_id in visited:
+            return
+        
+        visited.add(obj_id)
+        obj_data: Dict[str, Any] = {
+            '_name': current_obj._name,
+            '_born_in': current_obj._born_in.isoformat(),
+            '_friends': [id(friend) for friend in current_obj._friends],
+            '_id': obj_id
+        }
+        id_to_index[obj_id] = len(objects_data)
+        objects_data.append(obj_data)
+        
+        for friend in current_obj._friends:
+            collect_objects(friend)
+    
+    collect_objects(obj)
+    
+    for obj_data in objects_data:
+        friends_ids: List[int] = obj_data['_friends']
+        obj_data['_friends'] = [id_to_index[friend_id] for friend_id in friends_ids]
+    
+    result: Dict[str, Any] = {
+        'objects': objects_data,
+        'root_index': id_to_index[id(obj)]
+    }
+    
+    return json.dumps(result, ensure_ascii=False).encode('utf-8')
+
+def decode_fp(data: bytes) -> Person:
+    parsed: Dict[str, Any] = json.loads(data.decode('utf-8'))
+    objects_data: List[Dict[str, Any]] = parsed['objects']
+    root_index: int = parsed['root_index']
+    
+    objects: List[Person] = []
+    for obj_data in objects_data:
+        person: Person = object.__new__(Person)
+        person._name = str(obj_data['_name'])
+        person._born_in = dt.datetime.fromisoformat(str(obj_data['_born_in']))
+        person._friends = []
+        objects.append(person)
+    
+    for i, obj_data in enumerate(objects_data):
+        person: Person = objects[i]
+        friend_indices: List[int] = obj_data['_friends']
+        person._friends = [objects[idx] for idx in friend_indices]
+    
+    return objects[root_index]
+
+class DirectEncoder:
+    @staticmethod
+    def encode(obj: Person) -> bytes:
+        visited: Set[int] = set()
+        objects_data: List[Dict[str, Any]] = []
+        id_to_index: Dict[int, int] = {}
+        
+        def collect(current_obj: Person) -> None:
+            obj_id: int = id(current_obj)
+            if obj_id in visited:
+                return
+            
+            visited.add(obj_id)
+            obj_data: Dict[str, Any] = {
+                'name': current_obj._name,
+                'born_in': current_obj._born_in.isoformat(),
+                'friends': [id(f) for f in current_obj._friends],
+                'id': obj_id
+            }
+            id_to_index[obj_id] = len(objects_data)
+            objects_data.append(obj_data)
+            
+            for friend in current_obj._friends:
+                collect(friend)
+        
+        collect(obj)
+        
+        for obj_data in objects_data:
+            friends_ids: List[int] = obj_data['friends']
+            obj_data['friends'] = [id_to_index[f_id] for f_id in friends_ids]
+            del obj_data['id']
+        
+        result: Dict[str, Any] = {
+            'objects': objects_data,
+            'root': id_to_index[id(obj)]
+        }
+        
+        return json.dumps(result, indent=2).encode('utf-8')
+    
+    @staticmethod
+    def decode(data: bytes) -> Person:
+        parsed: Dict[str, Any] = json.loads(data.decode('utf-8'))
+        objects_data: List[Dict[str, Any]] = parsed['objects']
+        root_index: int = parsed['root']
+        
+        objects: List[Person] = []
+        for data in objects_data:
+            person: Person = object.__new__(Person)
+            person._name = str(data['name'])
+            person._born_in = dt.datetime.fromisoformat(str(data['born_in']))
+            person._friends = []
+            objects.append(person)
+        
+        for i, data in enumerate(objects_data):
+            friend_indices: List[int] = data['friends']
+            objects[i]._friends = [objects[idx] for idx in friend_indices]
+        
+        return objects[root_index]
+
+class EncapsulatedEncoder:
+    @staticmethod
+    def encode(obj: Person) -> bytes:
+        visited: Set[int] = set()
+        objects_data: List[Dict[str, Any]] = []
+        id_to_index: Dict[int, int] = {}
+        
+        def collect(current_obj: Person) -> None:
+            obj_id: int = id(current_obj)
+            if obj_id in visited:
+                return
+            
+            visited.add(obj_id)
+            obj_dict: Dict[str, Any] = current_obj.to_dict()
+            obj_data: Dict[str, Any] = {
+                'name': obj_dict['_name'],
+                'born_in': obj_dict['_born_in'],
+                'friends': obj_dict['_friends_ids'],
+                'id': obj_id
+            }
+            id_to_index[obj_id] = len(objects_data)
+            objects_data.append(obj_data)
+            
+            for friend in current_obj._friends:
+                collect(friend)
+        
+        collect(obj)
+        
+        for obj_data in objects_data:
+            friends_ids: List[int] = obj_data['friends']
+            obj_data['friends'] = [id_to_index[f_id] for f_id in friends_ids]
+            del obj_data['id']
+        
+        result: Dict[str, Any] = {
+            'objects': objects_data,
+            'root': id_to_index[id(obj)]
+        }
+        
+        return json.dumps(result, indent=2).encode('utf-8')
+    
+    @staticmethod
+    def decode(data: bytes) -> Person:
+        parsed: Dict[str, Any] = json.loads(data.decode('utf-8'))
+        objects_data: List[Dict[str, Any]] = parsed['objects']
+        root_index: int = parsed['root']
+        
+        class TempPerson(Person):
+            @classmethod
+            def from_dict(cls, data: Dict[str, Any]) -> 'TempPerson':
+                name: str = str(data['name'])
+                born_in_str: str = str(data['born_in'])
+                person: TempPerson = cls(name, dt.datetime.fromisoformat(born_in_str))
+                return person
+        
+        objects: List[TempPerson] = []
+        for data in objects_data:
+            person: TempPerson = TempPerson.from_dict(data)
+            objects.append(person)
+        
+        for i, data in enumerate(objects_data):
+            friend_indices: List[int] = data['friends']
+            objects[i]._friends = [objects[idx] for idx in friend_indices]
+        
+        return cast(Person, objects[root_index])
+
+class PersonEncoder(ABC):
+    @abstractmethod
+    def encode(self, obj: Person) -> bytes:
+        pass
+    
+    @abstractmethod
+    def decode(self, data: bytes) -> Person:
+        pass
+
+class VisitorEncoder(PersonEncoder):
+    def encode(self, obj: Person) -> bytes:
+        storage: Dict[str, Any] = {
+            'objects': [],
+            'id_map': {},
+            'current_id': 0
+        }
+        
+        def visit(person: Person, visited: Dict[int, int]) -> Dict[str, Any]:
+            person_id: int = id(person)
+            if person_id in visited:
+                return {'ref': visited[person_id]}
+            
+            index: int = storage['current_id']
+            visited[person_id] = index
+            storage['current_id'] += 1
+            
+            person_dict: Dict[str, Any] = person.to_dict()
+            result: Dict[str, Any] = {
+                'name': person_dict['_name'],
+                'born_in': person_dict['_born_in'],
+                'friends': [],
+                'index': index
+            }
+            
+            storage['objects'].append(result)
+            storage['id_map'][person_id] = index
+            
+            for friend in person._friends:
+                friend_data: Dict[str, Any] = visit(friend, visited)
+                result['friends'].append(friend_data)
+            
+            return result
+        
+        visit(obj, {})
+        
+        final_objects: List[Dict[str, Any]] = []
+        for obj_data in storage['objects']:
+            friends_indices: List[int] = []
+            for friend_data in obj_data['friends']:
+                if 'ref' in friend_data:
+                    friends_indices.append(int(friend_data['ref']))
+                else:
+                    friends_indices.append(int(friend_data['index']))
+            final_objects.append({
+                'name': str(obj_data['name']),
+                'born_in': str(obj_data['born_in']),
+                'friends': friends_indices
+            })
+        
+        result: Dict[str, Any] = {
+            'objects': final_objects,
+            'root': storage['id_map'][id(obj)]
+        }
+        
+        return json.dumps(result, indent=2).encode('utf-8')
+    
+    def decode(self, data: bytes) -> Person:
+        parsed: Dict[str, Any] = json.loads(data.decode('utf-8'))
+        objects_data: List[Dict[str, Any]] = parsed['objects']
+        root_index: int = parsed['root']
+        
+        objects: List[Person] = []
+        for data in objects_data:
+            person: Person = object.__new__(Person)
+            person._name = str(data['name'])
+            person._born_in = dt.datetime.fromisoformat(str(data['born_in']))
+            person._friends = []
+            objects.append(person)
+        
+        for i, data in enumerate(objects_data):
+            friend_indices: List[int] = data['friends']
+            for friend_idx in friend_indices:
+                if objects[i] not in objects[friend_idx]._friends:
+                    objects[i]._friends.append(objects[friend_idx])
+        
+        return objects[root_index]
+
+EncoderFunc = Callable[[Person], bytes]
+DecoderFunc = Callable[[bytes], Person]
+
+def test_all_encoders() -> None:
+    p1: Person = Person("Ivan", dt.datetime(2020, 4, 12))
+    p2: Person = Person("Petr", dt.datetime(2021, 9, 27))
+    p3: Person = Person("Anna", dt.datetime(2019, 3, 15))
+    
+    p1.add_friend(p2)
+    p2.add_friend(p3)
+    p3.add_friend(p1)
+    
+    print("Исходные объекты:")
+    print(f"p1: {p1._name}, друзей: {len(p1._friends)}")
+    print(f"p2: {p2._name}, друзей: {len(p2._friends)}")
+    print(f"p3: {p3._name}, друзей: {len(p3._friends)}")
+    print()
+    
+    encoders: List[tuple[str, EncoderFunc, DecoderFunc]] = [
+        ("Функциональный", encode_fp, decode_fp),
+        ("ООП (нарушение инкапсуляции)", DirectEncoder.encode, DirectEncoder.decode),
+        ("ООП (с инкапсуляцией)", EncapsulatedEncoder.encode, EncapsulatedEncoder.decode),
+        ("ООП (Посетитель)", VisitorEncoder().encode, VisitorEncoder().decode)
+    ]
+    
+    for name, encode_func, decode_func in encoders:
+        print(f"\n{'='*50}")
+        print(f"Тестирование: {name}")
+        print('='*50)
+        
+        encoded: bytes = encode_func(p1)
+        print(f"Закодировано {len(encoded)} байт")
+        
+        decoded: Person = decode_func(encoded)
+        
+        print(f"Восстановленный объект: {decoded._name}")
+        print(f"Дата рождения: {decoded._born_in}")
+        print(f"Количество друзей: {len(decoded._friends)}")
+        if decoded._friends:
+            friend: Person = decoded._friends[0]
+            print(f"Первый друг: {friend._name}")
+            if friend._friends:
+                friend_of_friend: Person = friend._friends[0]
+                print(f"Друг первого друга: {friend_of_friend._name}")
+        
+        print("Проверка циклов: ", end="")
+        if (decoded._friends and 
+            decoded._friends[0]._friends and 
+            decoded._friends[0]._friends[0] == decoded):
+            print("✓ Цикл сохранен")
+        else:
+            print("✗ Цикл потерян")
+
+def save_to_file(person: Person, filename: str, encoder: EncoderFunc) -> None:
+    encoded: bytes = encoder(person)
+    with open(filename, 'wb') as f:
+        f.write(encoded)
+    print(f"Объект сохранен в {filename}")
+
+def load_from_file(filename: str, decoder: DecoderFunc) -> Person:
+    with open(filename, 'rb') as f:
+        data: bytes = f.read()
+    return decoder(data)
+
+if __name__ == "__main__":
+    test_all_encoders()
+    
+    print("\n\n" + "="*60)
+    print("ПРИМЕР РАБОТЫ С ФАЙЛАМИ")
+    print("="*60)
+    
+    p1: Person = Person("Test User", dt.datetime(1990, 1, 1))
+    p2: Person = Person("Test Friend", dt.datetime(1991, 2, 2))
+    p1.add_friend(p2)
+    
+    save_to_file(p1, "person.json", encode_fp)
+    loaded_person: Person = load_from_file("person.json", decode_fp)
+    
+    print(f"Загруженный объект: {loaded_person._name}")
+    print(f"Друзей: {len(loaded_person._friends)}")
+    if loaded_person._friends:
+        print(f"Первый друг: {loaded_person._friends[0]._name}")
+
+#сравнение подходов:
+
+#1. Функциональный подход
+#Отличия: Чистые функции без состояния, рекурсивный обход, отделение данных от поведения
+#Проблемы: Нарушение инкапсуляции (доступ к _friends), сложная обработка циклических ссылок, нет полиморфизма
+#2. ООП подход 1 (нарушение инкапсуляции)
+#Отличия: Прямой доступ к приватным полям через _, простой и быстрый
+#Проблемы: Нарушение принципов ООП, хрупкость (зависит от внутренней реализации), сложность поддержки при изменении класса
+#3. ООП подход 2 (с инкапсуляцией)
+#Отличия: Использование публичного API (to_dict()), соблюдение инкапсуляции
+#Проблемы: Требует изменения исходного класса, менее эффективен, все равно требуется доступ к друзьям для обхода графа
+#4. ООП подход 3 (паттерн Посетитель)
+#Отличия: Разделение алгоритма и структуры, гибкая архитектура
+#Проблемы: Избыточная сложность для простых случаев, все равно нужен доступ к приватным полям, оверхед на поддержку
+#5. Протокольный подход
+#Отличия: Использование протоколов (интерфейсов), явное разделение ответственности
+#Проблемы: Требует изменения всех классов, дополнительная сложность, дублирование кода
+
